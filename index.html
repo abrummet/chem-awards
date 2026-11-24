@@ -53,6 +53,8 @@ aside{position:sticky;top:calc(env(safe-area-inset-top,0px) + 12px);display:flex
 .chips{display:flex;flex-wrap:wrap;gap:5px}
 .chip{font:inherit;font-size:13px;border:1px solid var(--line);background:var(--bg);color:var(--ink);border-radius:999px;padding:4px 10px;cursor:pointer;line-height:1.3}
 .chip:hover{border-color:var(--accent)}
+.chip:not(.any)[aria-pressed="true"]::before{content:"✓ ";font-weight:600}
+.hint{font-weight:400;text-transform:none;letter-spacing:0;color:var(--muted);opacity:.8;margin-left:4px}
 .chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:500}
 .chip:focus-visible,.search:focus-visible,select:focus-visible,a:focus-visible,button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .search{font:inherit;width:100%;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
@@ -99,15 +101,15 @@ select{font:inherit;font-size:13.5px;padding:5px 8px;border:1px solid var(--line
   <header>
     <div>
       <h1>Chemistry Awards Finder</h1>
-      <p class="lede">Tap what describes you. The list keeps only awards you could be nominated for or apply to, with the best fits first.</p>
+      <p class="lede">Tap what describes you. You can pick more than one option in each group; the list shows awards that fit any of them, best fits first.</p>
       <p class="checked">Deadlines last checked against each award's website: <strong>Nov 10, 2026</strong></p>
     </div>
   </header>
   <div class="layout">
     <aside aria-label="Filters">
-      <fieldset class="group"><legend>Career stage</legend><div class="chips" id="f-career"></div></fieldset>
-      <fieldset class="group"><legend>My field</legend><div class="chips" id="f-field"></div></fieldset>
-      <fieldset class="group"><legend>Recognition for</legend><div class="chips" id="f-recog"></div></fieldset>
+      <fieldset class="group"><legend>Career stage <span class="hint">pick any</span></legend><div class="chips" id="f-career"></div></fieldset>
+      <fieldset class="group"><legend>My field <span class="hint">pick any</span></legend><div class="chips" id="f-field"></div></fieldset>
+      <fieldset class="group"><legend>Recognition for <span class="hint">pick any</span></legend><div class="chips" id="f-recog"></div></fieldset>
       <fieldset class="group"><legend>Source</legend><div class="chips" id="f-scope"></div></fieldset>
       <div class="group"><label class="lab" for="q">Keyword</label><input class="search" id="q" type="search" placeholder="e.g. catalysis, undergraduate, patent" autocomplete="off"></div>
       <button class="reset" id="reset" type="button">Clear all choices</button>
@@ -132,51 +134,63 @@ const OPTS = {
   career:["Any","Early career","Mid-career","Established / senior"],
   field:["Any","Organic","Inorganic & Organometallic","Analytical & Electrochemistry","Physical & Computational","Biological & Medicinal","Materials, Polymer & Surface","Environmental & Green","Catalysis, Energy & Industrial","Chemical Education"],
   recog:["Any","Research","Teaching","Mentoring","Service","Outreach & public engagement","Diversity & inclusion","Innovation & entrepreneurship","Leadership"],
-  scope:["Both","Internal","External"]
+  scope:["Any","Internal","External"]
 };
-const LABEL = {scope:{"Internal":"University of Iowa","External":"External"}};
-const DEF = {career:"Any",field:"Any",recog:"Any",scope:"Both",q:"",sort:"best"};
-let state = {...DEF};
-try{ const s = JSON.parse(localStorage.getItem("awardsFinder")||"null"); if(s) state = {...DEF,...s}; }catch(e){}
-function save(){ try{ localStorage.setItem("awardsFinder", JSON.stringify(state)); }catch(e){} }
+const KEYS = ["career","field","recog","scope"];
+const LABEL = {scope:{"Any":"Both","Internal":"University of Iowa","External":"External"}};
+// Each section holds a list of picks; an empty list means "Any". Picks within a section are OR'd.
+const DEF = () => ({career:[],field:[],recog:[],scope:[],q:"",sort:"best"});
+let state = DEF();
+try{
+  const s = JSON.parse(localStorage.getItem("awardsFinder2")||"null");
+  if(s){ KEYS.forEach(k=>{ if(Array.isArray(s[k])) state[k]=s[k].filter(v=>OPTS[k].includes(v) && v!=="Any"); });
+         if(typeof s.q==="string") state.q=s.q; if(["best","soon","az"].includes(s.sort)) state.sort=s.sort; }
+}catch(e){}
+function save(){ try{ localStorage.setItem("awardsFinder2", JSON.stringify(state)); }catch(e){} }
 
 const esc = s => String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
+function pressed(k,v){ return v==="Any" ? state[k].length===0 : state[k].includes(v); }
 function buildChips(key){
   const box = document.getElementById("f-"+key);
-  box.innerHTML = OPTS[key].map(v=>`<button type="button" class="chip" data-k="${key}" data-v="${esc(v)}" aria-pressed="${state[key]===v}">${esc((LABEL[key]||{})[v]||v)}</button>`).join("");
+  box.innerHTML = OPTS[key].map(v=>`<button type="button" class="chip${v==="Any"?" any":""}" data-k="${key}" data-v="${esc(v)}" aria-pressed="${pressed(key,v)}">${esc((LABEL[key]||{})[v]||v)}</button>`).join("");
 }
-["career","field","recog","scope"].forEach(buildChips);
+function syncChips(k){ document.querySelectorAll(`#f-${k} .chip`).forEach(c=>c.setAttribute("aria-pressed", pressed(k,c.dataset.v))); }
+KEYS.forEach(buildChips);
 document.querySelector("aside").addEventListener("click",e=>{
   const b = e.target.closest(".chip"); if(!b) return;
   const k=b.dataset.k, v=b.dataset.v;
-  state[k] = (state[k]===v && k!=="scope") ? "Any" : v;
-  document.querySelectorAll(`#f-${k} .chip`).forEach(c=>c.setAttribute("aria-pressed", c.dataset.v===state[k]));
-  save(); render();
+  if(v==="Any") state[k]=[];
+  else {
+    state[k] = state[k].includes(v) ? state[k].filter(x=>x!==v) : [...state[k], v];
+    if(state[k].length===OPTS[k].length-1) state[k]=[];   // everything picked = Any
+  }
+  syncChips(k); save(); render();
 });
 const q = document.getElementById("q"); q.value = state.q;
 q.addEventListener("input",()=>{ state.q=q.value; save(); render(); });
 const sortSel = document.getElementById("sort"); sortSel.value = state.sort;
 sortSel.addEventListener("change",()=>{ state.sort=sortSel.value; save(); render(); });
 document.getElementById("reset").addEventListener("click",()=>{
-  state={...DEF}; q.value=""; sortSel.value="best"; ["career","field","recog","scope"].forEach(buildChips); save(); render();
+  state=DEF(); q.value=""; sortSel.value="best"; KEYS.forEach(buildChips); save(); render();
 });
 
 const nowM = new Date().getMonth()+1;
 const offset = a => a.month ? ((a.month - nowM + 12) % 12) : 99;
+const anyOf = (list, picks) => picks.some(p=>list.includes(p));
 
 function score(a){
   let s=0;
-  if(state.field!=="Any" && a.fields.includes(state.field)) s+=3;
-  if(state.career!=="Any" && a.career.includes(state.career)) s+=2;
-  if(state.recog!=="Any" && a.recog[0]===state.recog) s+=1;
+  if(anyOf(a.fields, state.field)) s+=3;
+  if(anyOf(a.career, state.career)) s+=2;
+  if(state.recog.includes(a.recog[0])) s+=1;
   return s;
 }
 function matches(a){
-  if(state.field!=="Any" && !a.fields.includes(state.field) && !a.fields.includes("All fields")) return false;
-  if(state.career!=="Any" && !a.career.includes(state.career) && !a.career.includes("Any stage")) return false;
-  if(state.recog!=="Any" && !a.recog.includes(state.recog)) return false;
-  if(state.scope!=="Both" && a.scope!==state.scope) return false;
+  if(state.field.length && !anyOf(a.fields, state.field) && !a.fields.includes("All fields")) return false;
+  if(state.career.length && !anyOf(a.career, state.career) && !a.career.includes("Any stage")) return false;
+  if(state.recog.length && !anyOf(a.recog, state.recog)) return false;
+  if(state.scope.length && !state.scope.includes(a.scope)) return false;
   const t = state.q.trim().toLowerCase();
   if(t){ const hay=[a.name,a.desc,a.restrict,a.sponsor,a.fields.join(" "),a.recog.join(" ")].join(" ").toLowerCase();
     if(!t.split(/\s+/).every(w=>hay.includes(w))) return false; }
@@ -220,7 +234,7 @@ function render(){
   r.sort(by);
   document.getElementById("count").innerHTML = `${r.length} <span>${r.length===1?"award":"awards"} of ${AWARDS.length}</span>`;
   document.getElementById("list").innerHTML = r.length ? r.map(card).join("") :
-    `<div class="empty">No awards match all of those choices. Try a broader field, set Recognition to Any, or clear the keyword.</div>`;
+    `<div class="empty">No awards match those choices. Try adding another option, set a group back to Any, or clear the keyword.</div>`;
 }
 render();
 </script>
